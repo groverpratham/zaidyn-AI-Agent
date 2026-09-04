@@ -2,10 +2,15 @@
 
 A small internal tool: give it a file path + file name in S3, it reads the
 file, works out the delimiter and column schema, and generates the ingestion
-config JSON automatically.
+config JSON automatically. From there you can upload that generated JSON
+straight back into S3 (under the `ZDH_AI_AGENT/` prefix by default), or send
+it to a downstream pipeline once one is configured.
 
 ```
-File Path + File Name  →  [Run]  →  reads file in S3  →  generated JSON
+File Path + File Name → [Run] → reads file in S3 → generated JSON
+                                                        │
+                                                        ├─ [Upload to S3] → s3://<bucket>/ZDH_AI_AGENT/<name>.json
+                                                        └─ [Send to Pipeline] → DOWNSTREAM_API_URL
 ```
 
 ---
@@ -18,6 +23,7 @@ zaidyn-s3-tool/
     index.js            ← the page you see (form + result panel)
     api/
       generate-json.js   ← reads the S3 file, builds the JSON
+      upload-to-s3.js    ← writes the generated JSON back to S3 (ZDH_AI_AGENT/)
       forward-json.js    ← placeholder for step 2 (sending JSON onward)
   lib/
     s3Client.js          ← AWS S3 connection
@@ -53,7 +59,12 @@ AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 AWS_REGION=us-east-1
 S3_BUCKET_NAME=your-bucket-name
+S3_UPLOAD_PREFIX=ZDH_AI_AGENT
 ```
+
+`S3_UPLOAD_PREFIX` is the folder inside `S3_BUCKET_NAME` that the **Upload to
+S3** button writes generated configs into. It defaults to `ZDH_AI_AGENT` if
+you leave it unset.
 
 (See section 4 below for how to get an AWS key scoped just to this.)
 
@@ -84,9 +95,10 @@ setup.
    ```
 2. Go to **vercel.com** → sign up free with your GitHub account.
 3. **Add New Project** → import the repo you just pushed.
-4. Before deploying, open **Environment Variables** and add the same four
-   values from your `.env.local`:
-   `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `S3_BUCKET_NAME`
+4. Before deploying, open **Environment Variables** and add the same values
+   from your `.env.local`:
+   `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `S3_BUCKET_NAME`,
+   `S3_UPLOAD_PREFIX` (optional — defaults to `ZDH_AI_AGENT`)
 5. Click **Deploy**. You'll get a live URL like `https://your-project.vercel.app`.
 6. From now on, every `git push` to `main` redeploys automatically.
 
@@ -97,7 +109,9 @@ No cost at this scale — Hobby covers this comfortably.
 ## 4. AWS setup (least-privilege — don't hand out full S3 access)
 
 Create an IAM user just for this tool, with a policy scoped to only the one
-bucket and only read access:
+bucket. It needs to **read** anywhere in the bucket (to inspect source files)
+but only needs to **write** under the `ZDH_AI_AGENT/` prefix (where generated
+configs are uploaded):
 
 ```json
 {
@@ -112,10 +126,18 @@ bucket and only read access:
       "Effect": "Allow",
       "Action": ["s3:ListBucket"],
       "Resource": "arn:aws:s3:::YOUR_BUCKET_NAME"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject"],
+      "Resource": "arn:aws:s3:::YOUR_BUCKET_NAME/ZDH_AI_AGENT/*"
     }
   ]
 }
 ```
+
+If you change `S3_UPLOAD_PREFIX` away from `ZDH_AI_AGENT`, update the last
+statement's resource path to match.
 
 Steps in the AWS console: **IAM → Users → Create user → Attach policy
 directly → paste the JSON above (as a custom policy) → create an access
@@ -141,7 +163,20 @@ variables (in production). Rotate the key periodically.
 
 ---
 
-## 6. Wiring up the downstream API later
+## 6. Uploading the generated JSON to S3
+
+Once a config is generated, click **Upload to S3** on the result card. This
+calls `pages/api/upload-to-s3.js`, which `PutObject`s the JSON to:
+
+```
+s3://<S3_BUCKET_NAME>/<S3_UPLOAD_PREFIX>/<file name without extension>.json
+```
+
+(`S3_UPLOAD_PREFIX` defaults to `ZDH_AI_AGENT`.) The response shows the full
+`s3://...` path once it succeeds. No changes are needed to use this — it
+just needs the `s3:PutObject` permission from section 4 above.
+
+## 7. Wiring up the downstream API later
 
 `pages/api/forward-json.js` already exists and is already wired to the
 **Send to Pipeline** button on the page — it's just not pointed anywhere
@@ -156,13 +191,15 @@ No changes to the frontend should be needed for this step.
 
 ---
 
-## 7. Making changes
+## 8. Making changes
 
 - **Colors / logo / copy** → `pages/index.js`, inside the `<style jsx>`
   block at the bottom, or the `Logo()` component near the bottom of the
   same file.
 - **Which fields go in the JSON, or their fixed values** → `lib/configBuilder.js`.
 - **How delimiter/column-type detection works** → `lib/fileInspector.js`.
+- **Where the generated JSON gets uploaded in S3** → `pages/api/upload-to-s3.js`
+  (or just set `S3_UPLOAD_PREFIX`).
 - **Add support for a file type other than delimited text** (e.g. fixed-width,
   Parquet) → extend `detectDelimiterAndSchema` in `lib/fileInspector.js`
   and branch on file extension in `pages/api/generate-json.js`.

@@ -8,12 +8,16 @@ export default function Home() {
   const [result, setResult] = useState(null);
   const [copied, setCopied] = useState(false);
   const [sendStatus, setSendStatus] = useState("");
+  const [uploadStatus, setUploadStatus] = useState("");
+  const [uploadPath, setUploadPath] = useState("");
 
   async function handleRun(e) {
     e.preventDefault();
     setError("");
     setResult(null);
     setSendStatus("");
+    setUploadStatus("");
+    setUploadPath("");
 
     if (!filePath.trim() || !fileName.trim()) {
       setError("Fill in both File Path and File Name before running.");
@@ -60,6 +64,30 @@ export default function Home() {
       setSendStatus(body.success ? "sent" : "not-configured");
     } catch {
       setSendStatus("error");
+    }
+  }
+
+  async function handleUpload() {
+    if (!result) return;
+    setUploadStatus("uploading");
+    setUploadPath("");
+    try {
+      const res = await fetch("/api/upload-to-s3", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ json: result, fileName }),
+      });
+      const body = await res.json();
+      if (body.success) {
+        setUploadStatus("uploaded");
+        setUploadPath(body.path);
+      } else {
+        setUploadStatus("error");
+        setError(body.message || "Couldn't upload the JSON to S3.");
+      }
+    } catch (err) {
+      setUploadStatus("error");
+      setError(err.message || "Couldn't reach the server.");
     }
   }
 
@@ -131,7 +159,14 @@ export default function Home() {
                 <button onClick={handleCopy} className="ghostbtn">
                   {copied ? "Copied" : "Copy JSON"}
                 </button>
-                <button onClick={handleSend} className="ghostbtn primary">
+                <button
+                  onClick={handleUpload}
+                  className="ghostbtn primary"
+                  disabled={uploadStatus === "uploading"}
+                >
+                  {uploadStatus === "uploading" ? "Uploading…" : "Upload to S3"}
+                </button>
+                <button onClick={handleSend} className="ghostbtn">
                   Send to Pipeline
                 </button>
               </div>
@@ -147,6 +182,13 @@ export default function Home() {
                 ))}
               </pre>
             </div>
+
+            {uploadStatus === "uploaded" && (
+              <p className="hint success">Uploaded to {uploadPath}</p>
+            )}
+            {uploadStatus === "error" && (
+              <p className="hint danger">Upload failed — see the error above.</p>
+            )}
 
             {sendStatus === "not-configured" && (
               <p className="hint">
